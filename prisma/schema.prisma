@@ -1,0 +1,40 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model DailyReport {
+  id              String    @id @default(cuid())
+  markdownContent String
+  signalCount     Int       @default(0)
+  status          String    @default("pending")
+  deliveryStatus  String    @default("pending")
+  emailSentAt     DateTime?
+  createdAt       DateTime  @default(now())
+  completedAt     DateTime?
+  signals         Signal[]
+}
+
+model Signal {
+  id          String      @id @default(cuid())
+  reportId    String
+  report      DailyReport @relation(fields: [reportId], references: [id], onDelete: Cascade)
+  category    String
+  title       String
+  description String
+  source      String?
+  confidence  Float       @default(0.5)
+  detectedAt  DateTime    @default(now())
+}
+
+model EmailRecipient {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  name      String?
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+}
