@@ -40,7 +40,8 @@ export async function POST(req: NextRequest) {
   for (const recipient of recipients) {
     const result = await sendDailyReportEmail(
       recipient.email,
-      report.markdownContent
+      report.markdownContent,
+      recipient.name
     );
     results.push({
       email: recipient.email,

@@ -78,7 +78,8 @@ export async function runDailyEvaluation(
       for (const recipient of recipients) {
         const emailResult = await sendDailyReportEmail(
           recipient.email,
-          markdownContent
+          markdownContent,
+          recipient.name
         );
         if (emailResult.success) sentCount++;
       }

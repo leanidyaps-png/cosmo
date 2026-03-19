@@ -35,7 +35,7 @@ function buildMimeMessage(
   const message = [
     `From: ${from}`,
     `To: ${to}`,
-    `Subject: ${subject}`,
+    `Subject: =?UTF-8?B?${Buffer.from(subject).toString("base64")}?=`,
     `MIME-Version: 1.0`,
     `Content-Type: multipart/mixed; boundary="${mixedBoundary}"`,
     ``,
@@ -44,13 +44,15 @@ function buildMimeMessage(
     ``,
     `--${boundary}`,
     `Content-Type: text/plain; charset="UTF-8"`,
+    `Content-Transfer-Encoding: base64`,
     ``,
-    text,
+    Buffer.from(text).toString("base64"),
     ``,
     `--${boundary}`,
     `Content-Type: text/html; charset="UTF-8"`,
+    `Content-Transfer-Encoding: base64`,
     ``,
-    html,
+    Buffer.from(html).toString("base64"),
     ``,
     `--${boundary}--`,
     `--${mixedBoundary}`,
@@ -105,7 +107,8 @@ ${rawHtml}
 
 export async function sendDailyReportEmail(
   toEmail: string,
-  markdownReport: string
+  markdownReport: string,
+  recipientName?: string | null
 ): Promise<{ success: boolean; emailId?: string; error?: string }> {
   const client = getGmailClient();
 
@@ -117,7 +120,8 @@ export async function sendDailyReportEmail(
   }
 
   const dateStr = new Date().toISOString().split("T")[0];
-  const subject = `Cosmo AI Intelligence Report — 30 Models · 9 Categories — ${dateStr}`;
+  const preparedFor = recipientName || toEmail;
+  const subject = `Cosmo AI Intelligence Report - Prepared for ${preparedFor} - ${dateStr}`;
   const html = markdownToHtml(markdownReport);
   const from = `Cosmo Intelligence <${client.user}>`;
 
