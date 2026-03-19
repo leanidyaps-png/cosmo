@@ -70,7 +70,7 @@ export async function sendDailyReportEmail(
 
   try {
     const { data, error } = await client.emails.send({
-      from: "Cosmo Intelligence <onboarding@resend.dev>",
+      from: "Cosmo Intelligence <arlen1788@berkeley.edu>",
       to: toEmail,
       subject,
       html,
