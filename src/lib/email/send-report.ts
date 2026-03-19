@@ -1,21 +1,35 @@
-import { Resend } from "resend";
+import nodemailer from "nodemailer";
 import { marked } from "marked";
 
-let resend: Resend | null = null;
+let transporter: nodemailer.Transporter | null = null;
 
-function getResend(): Resend | null {
-  const apiKey = process.env.RESEND_API_KEY;
+function getTransporter(): nodemailer.Transporter | null {
+  const user = process.env.GMAIL_USER;
+  const clientId = process.env.GMAIL_CLIENT_ID;
+  const clientSecret = process.env.GMAIL_CLIENT_SECRET;
+  const refreshToken = process.env.GMAIL_REFRESH_TOKEN;
 
-  if (!apiKey) {
-    console.warn("[Cosmo Email] RESEND_API_KEY not set, email disabled");
+  if (!user || !clientId || !clientSecret || !refreshToken) {
+    console.warn(
+      "[Cosmo Email] Gmail OAuth2 credentials not set, email disabled"
+    );
     return null;
   }
 
-  if (!resend) {
-    resend = new Resend(apiKey);
+  if (!transporter) {
+    transporter = nodemailer.createTransport({
+      service: "gmail",
+      auth: {
+        type: "OAuth2",
+        user,
+        clientId,
+        clientSecret,
+        refreshToken,
+      },
+    });
   }
 
-  return resend;
+  return transporter;
 }
 
 function markdownToHtml(markdown: string): string {
@@ -55,12 +69,12 @@ export async function sendDailyReportEmail(
   toEmail: string,
   markdownReport: string
 ): Promise<{ success: boolean; emailId?: string; error?: string }> {
-  const client = getResend();
+  const transport = getTransporter();
 
-  if (!client) {
+  if (!transport) {
     return {
       success: false,
-      error: "Resend not configured (RESEND_API_KEY missing)",
+      error: "Gmail OAuth2 not configured",
     };
   }
 
@@ -69,21 +83,23 @@ export async function sendDailyReportEmail(
   const html = markdownToHtml(markdownReport);
 
   try {
-    const { data, error } = await client.emails.send({
-      from: "Cosmo Intelligence <arlen1788@berkeley.edu>",
+    const info = await transport.sendMail({
+      from: `Cosmo Intelligence <${process.env.GMAIL_USER}>`,
       to: toEmail,
       subject,
       html,
       text: markdownReport,
+      attachments: [
+        {
+          filename: `cosmo-report-${dateStr}.md`,
+          content: markdownReport,
+          contentType: "text/markdown",
+        },
+      ],
     });
 
-    if (error) {
-      console.error(`[Cosmo Email] Failed to send to ${toEmail}:`, error.message);
-      return { success: false, error: error.message };
-    }
-
-    console.log(`[Cosmo Email] Sent to ${toEmail}, ID: ${data?.id}`);
-    return { success: true, emailId: data?.id };
+    console.log(`[Cosmo Email] Sent to ${toEmail}, ID: ${info.messageId}`);
+    return { success: true, emailId: info.messageId };
   } catch (err) {
     const message =
       err instanceof Error ? err.message : "Unknown email error";
