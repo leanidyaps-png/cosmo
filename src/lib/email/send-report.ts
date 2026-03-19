@@ -1,9 +1,7 @@
-import nodemailer from "nodemailer";
+import { google } from "googleapis";
 import { marked } from "marked";
 
-let transporter: nodemailer.Transporter | null = null;
-
-function getTransporter(): nodemailer.Transporter | null {
+function getGmailClient() {
   const user = process.env.GMAIL_USER;
   const clientId = process.env.GMAIL_CLIENT_ID;
   const clientSecret = process.env.GMAIL_CLIENT_SECRET;
@@ -16,20 +14,60 @@ function getTransporter(): nodemailer.Transporter | null {
     return null;
   }
 
-  if (!transporter) {
-    transporter = nodemailer.createTransport({
-      service: "gmail",
-      auth: {
-        type: "OAuth2",
-        user,
-        clientId,
-        clientSecret,
-        refreshToken,
-      },
-    });
-  }
+  const oauth2Client = new google.auth.OAuth2(clientId, clientSecret);
+  oauth2Client.setCredentials({ refresh_token: refreshToken });
 
-  return transporter;
+  return { gmail: google.gmail({ version: "v1", auth: oauth2Client }), user };
+}
+
+function buildMimeMessage(
+  from: string,
+  to: string,
+  subject: string,
+  html: string,
+  text: string,
+  attachmentContent: string,
+  attachmentFilename: string
+): string {
+  const boundary = "cosmo_boundary_" + Date.now();
+  const mixedBoundary = "cosmo_mixed_" + Date.now();
+
+  const message = [
+    `From: ${from}`,
+    `To: ${to}`,
+    `Subject: ${subject}`,
+    `MIME-Version: 1.0`,
+    `Content-Type: multipart/mixed; boundary="${mixedBoundary}"`,
+    ``,
+    `--${mixedBoundary}`,
+    `Content-Type: multipart/alternative; boundary="${boundary}"`,
+    ``,
+    `--${boundary}`,
+    `Content-Type: text/plain; charset="UTF-8"`,
+    ``,
+    text,
+    ``,
+    `--${boundary}`,
+    `Content-Type: text/html; charset="UTF-8"`,
+    ``,
+    html,
+    ``,
+    `--${boundary}--`,
+    `--${mixedBoundary}`,
+    `Content-Type: text/markdown; name="${attachmentFilename}"`,
+    `Content-Disposition: attachment; filename="${attachmentFilename}"`,
+    `Content-Transfer-Encoding: base64`,
+    ``,
+    Buffer.from(attachmentContent).toString("base64"),
+    ``,
+    `--${mixedBoundary}--`,
+  ].join("\r\n");
+
+  return Buffer.from(message)
+    .toString("base64")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/, "");
 }
 
 function markdownToHtml(markdown: string): string {
@@ -69,9 +107,9 @@ export async function sendDailyReportEmail(
   toEmail: string,
   markdownReport: string
 ): Promise<{ success: boolean; emailId?: string; error?: string }> {
-  const transport = getTransporter();
+  const client = getGmailClient();
 
-  if (!transport) {
+  if (!client) {
     return {
       success: false,
       error: "Gmail OAuth2 not configured",
@@ -81,25 +119,26 @@ export async function sendDailyReportEmail(
   const dateStr = new Date().toISOString().split("T")[0];
   const subject = `Cosmo AI Intelligence Report — 30 Models · 9 Categories — ${dateStr}`;
   const html = markdownToHtml(markdownReport);
+  const from = `Cosmo Intelligence <${client.user}>`;
+
+  const raw = buildMimeMessage(
+    from,
+    toEmail,
+    subject,
+    html,
+    markdownReport,
+    markdownReport,
+    `cosmo-report-${dateStr}.md`
+  );
 
   try {
-    const info = await transport.sendMail({
-      from: `Cosmo Intelligence <${process.env.GMAIL_USER}>`,
-      to: toEmail,
-      subject,
-      html,
-      text: markdownReport,
-      attachments: [
-        {
-          filename: `cosmo-report-${dateStr}.md`,
-          content: markdownReport,
-          contentType: "text/markdown",
-        },
-      ],
+    const res = await client.gmail.users.messages.send({
+      userId: "me",
+      requestBody: { raw },
     });
 
-    console.log(`[Cosmo Email] Sent to ${toEmail}, ID: ${info.messageId}`);
-    return { success: true, emailId: info.messageId };
+    console.log(`[Cosmo Email] Sent to ${toEmail}, ID: ${res.data.id}`);
+    return { success: true, emailId: res.data.id ?? undefined };
   } catch (err) {
     const message =
       err instanceof Error ? err.message : "Unknown email error";
