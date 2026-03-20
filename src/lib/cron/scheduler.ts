@@ -5,7 +5,7 @@ import type { SearchMode } from "@/lib/engine/deep-search";
 let scheduledTask: ScheduledTask | null = null;
 
 export function startScheduler(
-  cronExpression: string = "0 6 * * *",
+  cronExpression: string = "0 5 * * *",
   mode: SearchMode = "deep"
 ) {
   if (scheduledTask) {
@@ -50,12 +50,13 @@ export function stopScheduler() {
 }
 
 export function getNextRunTime(
-  cronExpression: string = "0 6 * * *"
+  cronExpression: string = "0 5 * * *"
 ): Date {
   const now = new Date();
   const [minute, hour] = cronExpression.split(" ");
+  const pstOffset = 8;
   const next = new Date(now);
-  next.setHours(parseInt(hour) || 6, parseInt(minute) || 0, 0, 0);
+  next.setUTCHours((parseInt(hour) || 5) + pstOffset, parseInt(minute) || 0, 0, 0);
   if (next <= now) {
     next.setDate(next.getDate() + 1);
   }

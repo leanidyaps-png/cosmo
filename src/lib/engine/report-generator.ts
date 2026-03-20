@@ -147,7 +147,8 @@ function buildReportShell(date: Date, signals: EvaluationSignal[]): {
 
   const nextRun = new Date(date);
   nextRun.setDate(nextRun.getDate() + 1);
-  nextRun.setHours(6, 0, 0, 0);
+  const pstOffset = 8;
+  nextRun.setUTCHours(5 + pstOffset, 0, 0, 0);
 
   const signalsSummary =
     signals.length > 0
@@ -218,7 +219,7 @@ ${buildPromptBestPractices()}
 
 ## Next Report
 
-**Scheduled:** ${nextRun.toLocaleDateString("en-US", { weekday: "long", year: "numeric", month: "long", day: "numeric" })} at 6:00 AM UTC
+**Scheduled:** ${nextRun.toLocaleDateString("en-US", { weekday: "long", year: "numeric", month: "long", day: "numeric" })} at 5:00 AM PST
 
 ---
 

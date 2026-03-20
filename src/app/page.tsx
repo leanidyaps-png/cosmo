@@ -72,7 +72,9 @@ function formatDate(d: string) {
 
 function getNextRun(): Date {
   const next = new Date();
-  next.setHours(6, 0, 0, 0);
+  // 5 AM PST = UTC-8, so 13:00 UTC (or 12:00 UTC during PDT)
+  const pstOffset = 8;
+  next.setUTCHours(5 + pstOffset, 0, 0, 0);
   if (next <= new Date()) next.setDate(next.getDate() + 1);
   return next;
 }
@@ -305,7 +307,7 @@ export default function CosmoPage() {
                   month: "short",
                   day: "numeric",
                 })}{" "}
-                at 6:00 AM UTC
+                at 5:00 AM PST
               </p>
             </div>
             <button
@@ -723,7 +725,7 @@ export default function CosmoPage() {
             <p className="text-xs text-[var(--muted-foreground)] mt-3">
               {activeRecipientCount} active recipient
               {activeRecipientCount !== 1 ? "s" : ""} will receive the
-              daily report automatically at 6:00 AM UTC and on any
+              daily report automatically at 5:00 AM PST and on any
               on-demand send.
             </p>
           )}
