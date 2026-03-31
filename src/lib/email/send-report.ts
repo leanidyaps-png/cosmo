@@ -31,8 +31,13 @@ function getNodemailerTransport() {
 
   return {
     transport: nodemailer.createTransport({
-      service: "gmail",
+      host: "smtp.gmail.com",
+      port: 587,
+      secure: false,
       auth: { user, pass: appPassword },
+      tls: { rejectUnauthorized: false },
+      // Force IPv4 — Railway containers may not support IPv6
+      family: 4,
     }),
     user,
   };

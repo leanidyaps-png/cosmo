@@ -399,6 +399,80 @@ Return ONLY valid JSON: {"signals": [...]}`,
   }
 }
 
+// ── Fallback: use OpenAI to search and synthesize when Tavily/Perplexity are down ──
+async function searchWithOpenAIFallback(
+  queries: string[],
+  category: string
+): Promise<EvaluationSignal[]> {
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) return [];
+
+  console.log(`[Cosmo] Using OpenAI fallback search for ${category} (${queries.length} queries)...`);
+
+  try {
+    const queryList = queries.slice(0, 5).map((q, i) => `${i + 1}. ${q}`).join("\n");
+
+    const response = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "gpt-4o-mini",
+        messages: [
+          {
+            role: "system",
+            content: `You are an AI industry analyst. Based on your training knowledge (up to early 2025) and general awareness, provide the most current and accurate information you have about the following AI model topics. Focus on specific model names, benchmark scores, pricing numbers, and factual details.
+
+Return a JSON object: {"signals": [...]} where each signal has:
+- "category": one of "benchmark", "model_release", "pricing", "bug", "context_window", "prompt_technique"
+- "title": concise title under 80 chars
+- "description": detailed description with specific numbers, model names, and context
+- "confidence": 0.3-0.8 (use 0.3-0.5 for general knowledge, 0.6-0.8 for well-established facts)
+
+Include 3-8 signals based on what you know. Focus on the most impactful and actionable information.
+Return ONLY valid JSON.`,
+          },
+          {
+            role: "user",
+            content: `Category: ${category}\n\nTopics to analyze:\n${queryList}\n\nProvide your best current intelligence on these topics.`,
+          },
+        ],
+        max_tokens: 2000,
+        temperature: 0.3,
+        response_format: { type: "json_object" },
+      }),
+    });
+
+    if (!response.ok) {
+      console.warn(`[Cosmo] OpenAI fallback search failed: ${response.status}`);
+      return [];
+    }
+
+    const data = await response.json();
+    const content = data.choices?.[0]?.message?.content || "{}";
+    const parsed = JSON.parse(content);
+    const signals = Array.isArray(parsed) ? parsed : parsed.signals || [];
+
+    const mapped = signals
+      .filter((s: { confidence?: number }) => (s.confidence || 0) >= 0.3)
+      .map((s: { category?: string; title?: string; description?: string; source?: string; confidence?: number }) => ({
+        category: (s.category || category) as EvaluationSignal["category"],
+        title: s.title || "Unknown signal",
+        description: s.description || "",
+        source: s.source,
+        confidence: s.confidence,
+      }));
+
+    console.log(`[Cosmo] OpenAI fallback for ${category}: ${mapped.length} signals`);
+    return mapped;
+  } catch (err) {
+    console.warn(`[Cosmo] OpenAI fallback error for ${category}:`, err instanceof Error ? err.message : err);
+    return [];
+  }
+}
+
 function extractSignalsFromRawData(
   tavilyResults: { query: string; results: { title: string; url: string; content: string }[] }[],
   perplexityResults: { query: string; answer: string; citations: string[] }[],
@@ -464,6 +538,18 @@ async function runQuickSearch(): Promise<EvaluationSignal[]> {
     searchWithTavily(useCaseQuickQueries, "basic", 3),
     searchWithPerplexity(perplexityQueries),
   ]);
+
+  // If both search APIs returned nothing, use OpenAI fallback
+  if (tavilyResults.length === 0 && useCaseResults.length === 0 && perplexityResults.length === 0) {
+    console.log("[Cosmo] Both Tavily and Perplexity returned 0 results, using OpenAI fallback...");
+    const fallbackPromises = SEARCH_CATEGORIES.map((c) =>
+      searchWithOpenAIFallback(c.queries.slice(0, 3), c.category)
+    );
+    const fallbackResults = await Promise.all(fallbackPromises);
+    const allFallback = fallbackResults.flat();
+    console.log(`[Cosmo] OpenAI fallback total: ${allFallback.length} signals`);
+    return deduplicateSignals(allFallback);
+  }
 
   const signals = await synthesizeSignalsWithOpenAI(
     [...tavilyResults, ...useCaseResults],
@@ -539,6 +625,17 @@ async function runDeepSearchFull(): Promise<EvaluationSignal[]> {
 
   const longTailSignals = await synthesizeSignalsWithOpenAI(ltTavily, ltPerplexity, "model_release");
   allSignals.push(...longTailSignals);
+
+  // If we still have 0 signals after all layers, use OpenAI fallback
+  if (allSignals.length === 0) {
+    console.log("[Cosmo] All search layers returned 0 signals, using OpenAI fallback...");
+    const fallbackPromises = SEARCH_CATEGORIES.map((c) =>
+      searchWithOpenAIFallback(c.queries.slice(0, 3), c.category)
+    );
+    const fallbackResults = await Promise.all(fallbackPromises);
+    allSignals.push(...fallbackResults.flat());
+    console.log(`[Cosmo] OpenAI fallback total: ${allSignals.length} signals`);
+  }
 
   return deduplicateSignals(allSignals);
 }
