@@ -38,7 +38,7 @@ function getNodemailerTransport() {
       tls: { rejectUnauthorized: false },
       // Force IPv4 — Railway containers may not support IPv6
       family: 4,
-    }),
+    } as nodemailer.TransportOptions),
     user,
   };
 }

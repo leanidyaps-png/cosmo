@@ -1,3 +1,4 @@
+import Anthropic from "@anthropic-ai/sdk";
 import { EvaluationSignal } from "@/lib/models/types";
 import { USE_CASE_REGISTRY } from "@/lib/models/registry";
 import { fetchUseCaseIntel } from "./deep-search";
@@ -251,22 +252,23 @@ ${buildStaticRoutingTable()}
 ${footer}`;
 }
 
-// ── Dynamic report (deep mode — live intelligence every run) ──────────────────
+// ── Dynamic report (deep mode — Claude 3-model pipeline) ─────────────────────
 
 export async function generateComprehensiveReport(
   signals: EvaluationSignal[]
 ): Promise<string> {
-  const apiKey = process.env.OPENAI_API_KEY;
+  const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) {
     return generateDailyReport({ signals, date: new Date() });
   }
 
+  const client = new Anthropic({ apiKey });
   const date = new Date();
   const dateStr = date.toLocaleDateString("en-US", {
     weekday: "long", year: "numeric", month: "long", day: "numeric",
   });
 
-  // Fetch live use-case intelligence in parallel with report shell construction
+  // Fetch live use-case intelligence
   let useCaseIntel: Awaited<ReturnType<typeof fetchUseCaseIntel>> = [];
   try {
     useCaseIntel = await fetchUseCaseIntel();
@@ -275,7 +277,7 @@ export async function generateComprehensiveReport(
     return generateDailyReport({ signals, date });
   }
 
-  // Serialize the static baseline registry for OpenAI context
+  // Serialize the static baseline registry
   const registryBaseline = Object.values(USE_CASE_REGISTRY).map((cat) => ({
     category: cat.name,
     weight: cat.weight,
@@ -299,38 +301,19 @@ export async function generateComprehensiveReport(
 
   // Serialize live intel
   const liveIntelSummary = useCaseIntel.map((uc) => {
-    const tavilyText = uc.tavilyResults
-      .flatMap((r) => r.results.map((res) => `[${uc.useCase}] ${res.title}: ${res.content.substring(0, 300)}`))
-      .join("\n");
     const perplexityText = uc.perplexityResults
       .map((r) => `[${uc.useCase}] Q: ${r.query}\nA: ${r.answer.substring(0, 400)}`)
       .join("\n");
-    return `=== ${uc.useCase.toUpperCase()} ===\n${perplexityText}\n${tavilyText}`;
+    return `=== ${uc.useCase.toUpperCase()} ===\n${perplexityText}`;
   }).join("\n\n");
 
-  // Signal context
   const signalContext = signals
     .map((s) => `[${s.category.toUpperCase()}] ${s.title}: ${s.description}`)
     .join("\n");
 
-  console.log("[Cosmo] Generating dynamic full report with live intelligence...");
+  const reportPrompt = `You are Cosmo, an AI model intelligence analyst for Klein Ventures. Today is ${dateStr}.
 
-  try {
-    // Single comprehensive OpenAI call to generate the full dynamic report body
-    const response = await fetch("https://api.openai.com/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: "gpt-4o",
-        messages: [
-          {
-            role: "system",
-            content: `You are Cosmo, an AI model intelligence analyst for Klein Ventures. Today is ${dateStr}.
-
-You write a daily intelligence report covering 30 AI models across 9 use-case categories that map to Klein Ventures' workflow:
+You write a daily intelligence report covering 30 AI models across 9 use-case categories:
 1. Planning (26% of workflow)
 2. Research (16%)
 3. Writing (17%)
@@ -341,69 +324,101 @@ You write a daily intelligence report covering 30 AI models across 9 use-case ca
 8. Legal & Lawyers
 9. BD, GTM & Business Development
 
-You are given:
-A) A BASELINE REGISTRY — the established knowledge about each category's top models (may be slightly stale)
-B) LIVE INTEL — fresh web search results gathered TODAY about each category
-C) SIGNALS — specific changes detected in the last 24 hours
-
-Your job: Write the FULL dynamic report body covering all 9 categories. For each category:
-- Update model rankings based on live intel (if something has changed, reflect it)
-- Note any models that have improved, declined, or been superseded since the baseline
-- Keep the same structured format as the baseline, but with live context baked in
-- If live intel confirms the baseline, say so and reinforce it with current evidence
-- If live intel reveals a change (new model, pricing shift, quality regression, better alternative), update the rankings and explain why
-
-FORMAT REQUIREMENTS (mandatory):
-- Use "## Category Name" for each of the 9 categories
-- Include a markdown table with columns: Rank | Model | Provider | Access Via | Speed | Cost | Key Benchmark
-- Below the table, include "#### #1 Model Name *(Provider)*" sections with Verdict, Strengths, Weaknesses, Best For, Prompt Tip
-- End each category with "**Workflow Pattern:**" tip
-- After all 9 categories, write "## Master Model Routing Table" with a full table of all 30 models
-- Use bold for key terms, italics for prompt tips
-- Be specific with numbers, model names, dates, and benchmark scores
-
-Write authoritatively. Sam Klein is a sophisticated user who uses these models daily — no fluff, just signal.`,
-          },
-          {
-            role: "user",
-            content: `BASELINE REGISTRY (established knowledge):
+BASELINE REGISTRY:
 ${JSON.stringify(registryBaseline, null, 2)}
 
-LIVE INTEL (gathered today, ${dateStr}):
+LIVE INTEL (gathered today):
 ${liveIntelSummary || "No live intel available — use baseline."}
 
-TODAY'S SIGNALS (specific 24h changes):
+TODAY'S SIGNALS:
 ${signalContext || "No specific signals today."}
 
-Generate the complete dynamic report body covering all 9 use-case categories and the master routing table. Apply today's live intel to update any rankings or recommendations that have changed. Flag any changes from the baseline prominently.`,
-          },
-        ],
-        max_tokens: 8000,
-        temperature: 0.3,
-      }),
+Write the FULL dynamic report body covering all 9 categories. For each category:
+- Update model rankings based on live intel
+- Include a markdown table: Rank | Model | Provider | Access Via | Speed | Cost | Key Benchmark
+- Below the table: "#### #1 Model Name *(Provider)*" with Verdict, Strengths, Weaknesses, Best For, Prompt Tip
+- End each category with "**Workflow Pattern:**" tip
+- After all 9 categories: "## Master Model Routing Table" with all 30 models
+- Be specific with numbers, model names, dates, benchmark scores
+- No fluff, just signal`;
+
+  console.log("[Cosmo] Generating report — Step 1: Initial draft...");
+
+  try {
+    // Step 1: Generate initial report
+    const step1 = await client.messages.create({
+      model: "claude-sonnet-4-6",
+      max_tokens: 8000,
+      messages: [{ role: "user", content: reportPrompt }],
     });
+    const initialDraft = step1.content[0].type === "text" ? step1.content[0].text : "";
 
-    if (!response.ok) {
-      console.error("[Cosmo] OpenAI report generation failed, falling back to static");
+    if (initialDraft.length < 500) {
       return generateDailyReport({ signals, date });
     }
 
-    const data = await response.json();
-    const dynamicBody = data.choices?.[0]?.message?.content || "";
+    console.log("[Cosmo] Step 2: Fact-checking report...");
 
-    if (dynamicBody.length < 500) {
+    // Step 2: Critique the report
+    const step2 = await client.messages.create({
+      model: "claude-sonnet-4-6",
+      max_tokens: 3000,
+      messages: [
+        {
+          role: "user",
+          content: `Review this AI intelligence report for accuracy. Flag any:
+1. Incorrect model names, versions, or benchmark scores
+2. Outdated pricing or capabilities
+3. Missing important recent developments
+4. Rankings that don't match current evidence
+5. Claims that lack supporting evidence
+
+REPORT TO REVIEW:
+${initialDraft.substring(0, 6000)}
+
+Provide specific corrections with accurate information.`,
+        },
+      ],
+    });
+    const critique = step2.content[0].type === "text" ? step2.content[0].text : "";
+
+    console.log("[Cosmo] Step 3: Synthesizing final report...");
+
+    // Step 3: Final synthesis
+    const step3 = await client.messages.create({
+      model: "claude-sonnet-4-6",
+      max_tokens: 8000,
+      messages: [
+        {
+          role: "user",
+          content: `You are producing the final version of an AI intelligence report. You have the initial draft and a fact-check review.
+
+INITIAL DRAFT:
+${initialDraft}
+
+FACT-CHECK REVIEW:
+${critique}
+
+Produce the FINAL report incorporating all corrections from the fact-check. Keep the same format and structure but fix any inaccuracies. If the critique identified missing information, add it. If it flagged incorrect claims, correct or remove them.
+
+Output ONLY the final report body in markdown (no preamble, no meta-commentary).`,
+        },
+      ],
+    });
+    const finalBody = step3.content[0].type === "text" ? step3.content[0].text : "";
+
+    if (finalBody.length < 500) {
       return generateDailyReport({ signals, date });
     }
 
-    // Build the final report: shell header + dynamic body + shell footer
     const { header, footer } = buildReportShell(date, signals);
     return `${header}
 
-${dynamicBody}
+${finalBody}
 
 ${footer}`;
   } catch (err) {
-    console.error("[Cosmo] Report generation error:", err);
+    console.error("[Cosmo] Claude report generation error:", err);
     return generateDailyReport({ signals, date });
   }
 }
