@@ -272,47 +272,64 @@ async function claudeSynthesize(
 ): Promise<EvaluationSignal[]> {
   const response = await client.messages.create({
     model: "claude-sonnet-4-6",
-    max_tokens: 3000,
+    max_tokens: 4000,
     messages: [
       {
         role: "user",
-        content: `You are the final editor for an AI intelligence report. You have the initial analysis and a fact-check critique. Synthesize both into a final set of verified signals.
+        content: `Synthesize the initial analysis and critique into 5-15 verified signals.
 
-=== INITIAL ANALYSIS ===
-${initialAnalysis}
+INITIAL ANALYSIS (summarized):
+${initialAnalysis.substring(0, 4000)}
 
-=== FACT-CHECK CRITIQUE ===
-${critique}
+CRITIQUE:
+${critique.substring(0, 3000)}
 
-Produce the final verified signals. For each signal:
+Rules:
 - Incorporate corrections from the critique
-- Remove signals that were flagged as inaccurate and cannot be corrected
-- Adjust confidence levels based on the critique
-- Add any missing signals the critique identified
+- Remove inaccurate signals
+- Keep confidence >= 0.3
+- Maximum 15 signals
 
-Return ONLY a JSON object: {"signals": [...]} where each signal has:
-- "category": one of "benchmark", "model_release", "pricing", "bug", "context_window", "prompt_technique"
-- "title": concise title under 80 chars
-- "description": detailed description with specific numbers, dates, model names
-- "source": source or basis for the information
-- "confidence": 0.0-1.0 (adjusted based on fact-check — lower if critique found issues, higher if critique confirmed)
+Respond with ONLY this JSON structure, nothing else before or after:
+[
+  {"category": "benchmark", "title": "...", "description": "...", "source": "...", "confidence": 0.7},
+  ...
+]
 
-Include signals with confidence >= 0.3. Return ONLY valid JSON, no other text.`,
+Valid categories: benchmark, model_release, pricing, bug, context_window, prompt_technique
+Respond with ONLY the JSON array.`,
       },
     ],
   });
 
-  const text = response.content[0].type === "text" ? response.content[0].text : "{}";
+  const text = response.content[0].type === "text" ? response.content[0].text : "[]";
 
   try {
-    // Extract JSON from response (may have markdown code block wrapper)
-    const jsonMatch = text.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) return [];
+    // Try direct parse first
+    let signals;
+    try {
+      signals = JSON.parse(text);
+    } catch {
+      // Extract JSON array from response
+      const arrayMatch = text.match(/\[[\s\S]*\]/);
+      if (arrayMatch) {
+        signals = JSON.parse(arrayMatch[0]);
+      } else {
+        // Try extracting from {"signals": [...]}
+        const objMatch = text.match(/\{[\s\S]*"signals"\s*:\s*\[[\s\S]*\][\s\S]*\}/);
+        if (objMatch) {
+          const parsed = JSON.parse(objMatch[0]);
+          signals = parsed.signals;
+        } else {
+          console.warn(`[Cosmo] Could not extract JSON from Claude response for ${category}`);
+          return [];
+        }
+      }
+    }
 
-    const parsed = JSON.parse(jsonMatch[0]);
-    const signals = Array.isArray(parsed) ? parsed : parsed.signals || [];
+    const arr = Array.isArray(signals) ? signals : signals?.signals || [];
 
-    return signals
+    return arr
       .filter((s: { confidence?: number }) => (s.confidence || 0) >= 0.3)
       .map(
         (s: {

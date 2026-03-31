@@ -1,6 +1,7 @@
 import { google } from "googleapis";
 import { marked } from "marked";
 import nodemailer from "nodemailer";
+import { Resend } from "resend";
 
 function getGmailClient() {
   const user = process.env.GMAIL_USER;
@@ -128,6 +129,55 @@ ${rawHtml}
 </html>`;
 }
 
+// ── Resend (primary when configured) ─────────────────────────────────────────
+// Set RESEND_API_KEY and RESEND_FROM_EMAIL (e.g. "reports@yourdomain.com")
+// You need to verify your domain in Resend dashboard first
+
+async function sendViaResend(
+  toEmail: string,
+  subject: string,
+  html: string,
+  markdownReport: string,
+  dateStr: string
+): Promise<{ success: boolean; emailId?: string; error?: string }> {
+  const apiKey = process.env.RESEND_API_KEY;
+  const fromEmail = process.env.RESEND_FROM_EMAIL;
+
+  if (!apiKey || !fromEmail) {
+    return { success: false, error: "Resend not configured (need RESEND_API_KEY + RESEND_FROM_EMAIL)" };
+  }
+
+  try {
+    const resend = new Resend(apiKey);
+    const { data, error } = await resend.emails.send({
+      from: `Cosmo Intelligence <${fromEmail}>`,
+      to: [toEmail],
+      subject,
+      html,
+      text: markdownReport,
+      attachments: [
+        {
+          filename: `cosmo-report-${dateStr}.md`,
+          content: Buffer.from(markdownReport).toString("base64"),
+          contentType: "text/markdown",
+        },
+      ],
+    });
+
+    if (error) {
+      console.warn(`[Cosmo Email] Resend failed for ${toEmail}: ${error.message}`);
+      return { success: false, error: error.message };
+    }
+
+    console.log(`[Cosmo Email] Sent via Resend to ${toEmail}, ID: ${data?.id}`);
+    return { success: true, emailId: data?.id };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Unknown Resend error";
+    console.warn(`[Cosmo Email] Resend error for ${toEmail}: ${message}`);
+    return { success: false, error: message };
+  }
+}
+
 async function sendViaNodemailer(
   toEmail: string,
   subject: string,
@@ -175,7 +225,11 @@ export async function sendDailyReportEmail(
   const subject = `Cosmo AI Intelligence Report - Prepared for ${preparedFor} - ${dateStr}`;
   const html = markdownToHtml(markdownReport);
 
-  // Try Gmail OAuth2 API first
+  // Priority 1: Resend (most reliable, needs domain verification)
+  const resendResult = await sendViaResend(toEmail, subject, html, markdownReport, dateStr);
+  if (resendResult.success) return resendResult;
+
+  // Priority 2: Gmail OAuth2 API
   const client = getGmailClient();
   if (client) {
     const from = `Cosmo Intelligence <${client.user}>`;
@@ -199,10 +253,10 @@ export async function sendDailyReportEmail(
       return { success: true, emailId: res.data.id ?? undefined };
     } catch (err) {
       const message = err instanceof Error ? err.message : "Unknown email error";
-      console.warn(`[Cosmo Email] OAuth2 failed for ${toEmail}: ${message}, trying Nodemailer...`);
+      console.warn(`[Cosmo Email] OAuth2 failed for ${toEmail}: ${message}`);
     }
   }
 
-  // Fallback to Nodemailer with App Password
+  // Priority 3: Nodemailer with App Password
   return sendViaNodemailer(toEmail, subject, html, markdownReport, dateStr);
 }
