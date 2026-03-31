@@ -1,5 +1,6 @@
 import { google } from "googleapis";
 import { marked } from "marked";
+import nodemailer from "nodemailer";
 
 function getGmailClient() {
   const user = process.env.GMAIL_USER;
@@ -9,7 +10,7 @@ function getGmailClient() {
 
   if (!user || !clientId || !clientSecret || !refreshToken) {
     console.warn(
-      "[Cosmo Email] Gmail OAuth2 credentials not set, email disabled"
+      "[Cosmo Email] Gmail OAuth2 credentials not set"
     );
     return null;
   }
@@ -18,6 +19,23 @@ function getGmailClient() {
   oauth2Client.setCredentials({ refresh_token: refreshToken });
 
   return { gmail: google.gmail({ version: "v1", auth: oauth2Client }), user };
+}
+
+function getNodemailerTransport() {
+  const user = process.env.GMAIL_USER;
+  const appPassword = process.env.GMAIL_APP_PASSWORD;
+
+  if (!user || !appPassword) {
+    return null;
+  }
+
+  return {
+    transport: nodemailer.createTransport({
+      service: "gmail",
+      auth: { user, pass: appPassword },
+    }),
+    user,
+  };
 }
 
 function buildMimeMessage(
@@ -105,48 +123,81 @@ ${rawHtml}
 </html>`;
 }
 
+async function sendViaNodemailer(
+  toEmail: string,
+  subject: string,
+  html: string,
+  markdownReport: string,
+  dateStr: string
+): Promise<{ success: boolean; emailId?: string; error?: string }> {
+  const nm = getNodemailerTransport();
+  if (!nm) {
+    return { success: false, error: "No email transport available (OAuth2 failed, no App Password set)" };
+  }
+
+  try {
+    const info = await nm.transport.sendMail({
+      from: `Cosmo Intelligence <${nm.user}>`,
+      to: toEmail,
+      subject,
+      text: markdownReport,
+      html,
+      attachments: [
+        {
+          filename: `cosmo-report-${dateStr}.md`,
+          content: markdownReport,
+          contentType: "text/markdown",
+        },
+      ],
+    });
+
+    console.log(`[Cosmo Email] Sent via Nodemailer to ${toEmail}, ID: ${info.messageId}`);
+    return { success: true, emailId: info.messageId };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Unknown email error";
+    console.error(`[Cosmo Email] Nodemailer also failed for ${toEmail}:`, message);
+    return { success: false, error: message };
+  }
+}
+
 export async function sendDailyReportEmail(
   toEmail: string,
   markdownReport: string,
   recipientName?: string | null
 ): Promise<{ success: boolean; emailId?: string; error?: string }> {
-  const client = getGmailClient();
-
-  if (!client) {
-    return {
-      success: false,
-      error: "Gmail OAuth2 not configured",
-    };
-  }
-
   const dateStr = new Date().toISOString().split("T")[0];
   const preparedFor = recipientName || toEmail;
   const subject = `Cosmo AI Intelligence Report - Prepared for ${preparedFor} - ${dateStr}`;
   const html = markdownToHtml(markdownReport);
-  const from = `Cosmo Intelligence <${client.user}>`;
 
-  const raw = buildMimeMessage(
-    from,
-    toEmail,
-    subject,
-    html,
-    markdownReport,
-    markdownReport,
-    `cosmo-report-${dateStr}.md`
-  );
+  // Try Gmail OAuth2 API first
+  const client = getGmailClient();
+  if (client) {
+    const from = `Cosmo Intelligence <${client.user}>`;
+    const raw = buildMimeMessage(
+      from,
+      toEmail,
+      subject,
+      html,
+      markdownReport,
+      markdownReport,
+      `cosmo-report-${dateStr}.md`
+    );
 
-  try {
-    const res = await client.gmail.users.messages.send({
-      userId: "me",
-      requestBody: { raw },
-    });
+    try {
+      const res = await client.gmail.users.messages.send({
+        userId: "me",
+        requestBody: { raw },
+      });
 
-    console.log(`[Cosmo Email] Sent to ${toEmail}, ID: ${res.data.id}`);
-    return { success: true, emailId: res.data.id ?? undefined };
-  } catch (err) {
-    const message =
-      err instanceof Error ? err.message : "Unknown email error";
-    console.error(`[Cosmo Email] Failed to send to ${toEmail}:`, message);
-    return { success: false, error: message };
+      console.log(`[Cosmo Email] Sent via OAuth2 to ${toEmail}, ID: ${res.data.id}`);
+      return { success: true, emailId: res.data.id ?? undefined };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Unknown email error";
+      console.warn(`[Cosmo Email] OAuth2 failed for ${toEmail}: ${message}, trying Nodemailer...`);
+    }
   }
+
+  // Fallback to Nodemailer with App Password
+  return sendViaNodemailer(toEmail, subject, html, markdownReport, dateStr);
 }

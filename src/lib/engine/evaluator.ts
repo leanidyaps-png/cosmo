@@ -23,9 +23,11 @@ export async function runDailyEvaluation(
   try {
     let signals: EvaluationSignal[];
     try {
+      console.log(`[Cosmo] Starting ${mode} deep search...`);
       signals = await runDeepSearch(mode);
+      console.log(`[Cosmo] Deep search complete: ${signals.length} signals found`);
     } catch (err) {
-      console.error("Deep search failed, continuing with empty signals:", err);
+      console.error("[Cosmo] Deep search failed:", err instanceof Error ? err.message : err);
       signals = [];
     }
 

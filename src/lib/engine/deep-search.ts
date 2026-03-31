@@ -216,7 +216,11 @@ async function searchWithTavily(
           }),
         });
 
-        if (!response.ok) return { query, results: [] };
+        if (!response.ok) {
+          const errText = await response.text().catch(() => "");
+          console.warn(`[Cosmo] Tavily ${response.status} for "${query.substring(0, 50)}": ${errText.substring(0, 200)}`);
+          return { query, results: [] };
+        }
         const data = await response.json();
         return {
           query,
@@ -228,13 +232,16 @@ async function searchWithTavily(
             })
           ),
         };
-      } catch {
+      } catch (err) {
+        console.warn(`[Cosmo] Tavily error for "${query.substring(0, 50)}":`, err instanceof Error ? err.message : err);
         return { query, results: [] };
       }
     })
   );
 
-  return results.filter((r) => r.results.length > 0);
+  const filtered = results.filter((r) => r.results.length > 0);
+  console.log(`[Cosmo] Tavily: ${filtered.length}/${queries.length} queries returned results`);
+  return filtered;
 }
 
 async function searchWithPerplexity(
@@ -269,20 +276,27 @@ async function searchWithPerplexity(
           }),
         });
 
-        if (!response.ok) return { query, answer: "", citations: [] };
+        if (!response.ok) {
+          const errText = await response.text().catch(() => "");
+          console.warn(`[Cosmo] Perplexity ${response.status} for "${query.substring(0, 50)}": ${errText.substring(0, 200)}`);
+          return { query, answer: "", citations: [] };
+        }
         const data = await response.json();
         return {
           query,
           answer: data.choices?.[0]?.message?.content || "",
           citations: data.citations || [],
         };
-      } catch {
+      } catch (err) {
+        console.warn(`[Cosmo] Perplexity error for "${query.substring(0, 50)}":`, err instanceof Error ? err.message : err);
         return { query, answer: "", citations: [] };
       }
     })
   );
 
-  return results.filter((r) => r.answer.length > 0);
+  const filtered = results.filter((r) => r.answer.length > 0);
+  console.log(`[Cosmo] Perplexity: ${filtered.length}/${queries.length} queries returned results`);
+  return filtered;
 }
 
 async function synthesizeSignalsWithOpenAI(
@@ -345,6 +359,8 @@ Return ONLY valid JSON: {"signals": [...]}`,
     });
 
     if (!response.ok) {
+      const errText = await response.text().catch(() => "");
+      console.warn(`[Cosmo] OpenAI synthesis ${response.status} for ${category}: ${errText.substring(0, 200)}`);
       return extractSignalsFromRawData(tavilyResults, perplexityResults, category);
     }
 
@@ -353,9 +369,9 @@ Return ONLY valid JSON: {"signals": [...]}`,
 
     try {
       const parsed = JSON.parse(content);
-      const signals = Array.isArray(parsed) ? parsed : parsed.signals || [];
-      return signals
-        .filter((s: { confidence?: number }) => (s.confidence || 0) >= 0.5)
+      const rawSignals = Array.isArray(parsed) ? parsed : parsed.signals || [];
+      const signals = rawSignals
+        .filter((s: { confidence?: number }) => (s.confidence || 0) >= 0.3)
         .map(
           (s: {
             category?: string;
@@ -371,10 +387,14 @@ Return ONLY valid JSON: {"signals": [...]}`,
             confidence: s.confidence,
           })
         );
-    } catch {
+      console.log(`[Cosmo] OpenAI synthesis for ${category}: ${rawSignals.length} raw → ${signals.length} after filter`);
+      return signals;
+    } catch (parseErr) {
+      console.warn(`[Cosmo] OpenAI JSON parse failed for ${category}:`, parseErr instanceof Error ? parseErr.message : parseErr);
       return extractSignalsFromRawData(tavilyResults, perplexityResults, category);
     }
-  } catch {
+  } catch (err) {
+    console.warn(`[Cosmo] OpenAI synthesis error for ${category}:`, err instanceof Error ? err.message : err);
     return extractSignalsFromRawData(tavilyResults, perplexityResults, category);
   }
 }
