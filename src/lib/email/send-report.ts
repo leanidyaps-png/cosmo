@@ -30,16 +30,18 @@ function getNodemailerTransport() {
     return null;
   }
 
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const opts: any = {
+    host: "smtp.gmail.com",
+    port: 587,
+    secure: false,
+    auth: { user, pass: appPassword },
+    tls: { rejectUnauthorized: false },
+    // Force IPv4 — Railway containers may not support IPv6
+    family: 4,
+  };
   return {
-    transport: nodemailer.createTransport({
-      host: "smtp.gmail.com",
-      port: 587,
-      secure: false,
-      auth: { user, pass: appPassword },
-      tls: { rejectUnauthorized: false },
-      // Force IPv4 — Railway containers may not support IPv6
-      family: 4,
-    } as nodemailer.TransportOptions),
+    transport: nodemailer.createTransport(opts),
     user,
   };
 }
@@ -141,10 +143,11 @@ async function sendViaResend(
   dateStr: string
 ): Promise<{ success: boolean; emailId?: string; error?: string }> {
   const apiKey = process.env.RESEND_API_KEY;
-  const fromEmail = process.env.RESEND_FROM_EMAIL;
+  // Use RESEND_FROM_EMAIL if set, otherwise default to Resend's test address
+  const fromEmail = process.env.RESEND_FROM_EMAIL || "onboarding@resend.dev";
 
-  if (!apiKey || !fromEmail) {
-    return { success: false, error: "Resend not configured (need RESEND_API_KEY + RESEND_FROM_EMAIL)" };
+  if (!apiKey) {
+    return { success: false, error: "RESEND_API_KEY not set" };
   }
 
   try {
